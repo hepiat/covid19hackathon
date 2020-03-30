@@ -102,10 +102,10 @@ print('Fraction of cells removed: ' + str(np.mean(FlagRemove >= 1)))
 print('Remaining are ' + str(np.sum(FlagRemove >= 1)) + ' cells')
 
 # remove the corresponding cells
-LatListClean = LatList[np.concatenate(FlagRemove) >= 1]
-LonListClean = LonList[np.concatenate(FlagRemove) >= 1]
-PopulationClean = np.concatenate(Population)[np.concatenate(FlagRemove) >= 1]
-CountryClean = np.concatenate(Country)[np.concatenate(FlagRemove) >= 1]
+LatListClean = LatList[np.concatenate(FlagRemove) < 1]
+LonListClean = LonList[np.concatenate(FlagRemove) < 1]
+PopulationClean = np.concatenate(Population)[np.concatenate(FlagRemove) < 1]
+CountryClean = np.concatenate(Country)[np.concatenate(FlagRemove) < 1]
 NcellsClean = len(CountryClean)
 
 
@@ -168,13 +168,49 @@ def StateUpdate(StateOld, ExchangeMatrix):
     return StateNew
 
 # define the ExchangeMatrix describing the number of people transferring from 1 cell to the next in each time step
-ExchangeMatrix = np.zeros((NcellsClean, NcellsClean))
+def MakeExchangeMatrixLocal(NcellsClean, PopulationClean, LatListClean, LonListClean):
+    
+    # estimate the distance between the different locations
+    dist = np.zeros((NcellsClean, NcellsClean))
+    for ii in range(NcellsClean):
+        dist[ii,:] = np.sqrt((LonListClean[ii]-LonListClean)**2 + (LatListClean[ii]-LatListClean)**2)
+    
+    # create the corresponding "diffusion" matrix
+    threshold = 0.3
+    DiffusionMatrix = 1 / (dist+1)
+    DiffusionMatrix[DiffusionMatrix < threshold] = 0
+    DiffusionMatrix_normalized = np.zeros(DiffusionMatrix.shape)
+    for ii in range(NcellsClean):
+        DiffusionMatrix_normalized[:,ii] =  DiffusionMatrix[:,ii] / np.sum(DiffusionMatrix[:,ii])
 
+    # number of people as target
+    exchange_amount = 0.01
+    ex_mat = np.zeros(dist.shape)
+    for ii in range(NcellsClean):
+        ex_mat[:,ii] = exchange_amount * np.minimum(np.repeat(PopulationClean[ii],NcellsClean), PopulationClean)
+
+    # limit the exchange matrix by multiplying with the diffusion matrix
+    ExchangeMatrix = ex_mat * (DiffusionMatrix_normalized > 0)
+    
+    # normalize so that the i,i element represents the number of people leaving
+    for ii in range(NcellsClean):
+        ExchangeMatrix[ii,ii] = ExchangeMatrix[ii,ii] - np.sum(ExchangeMatrix[:,ii])
+
+    # return the exchange matrix
+    return ExchangeMatrix
+    
+
+# and create it
+ExchangeMatrix = MakeExchangeMatrixLocal(NcellsClean, PopulationClean, LatListClean, LonListClean)
+
+# show the Exchange Matrix
+plt.figure()
+plt.imshow(np.abs(ExchangeMatrix))
 
 
 #%% simulate the evolution of the virus
 # the total number of time steps for the simulation 
-Ttotal = 10
+Ttotal = 200
 
 # initialize the model parameters 
 # beta: amount of susceptible getting exposed
@@ -230,9 +266,15 @@ def SimulateSingleStep(StateOld, OptsEpid, OptsTrans):
     
     return StateNew
 
+
+
 # define the initial state for all grid cells
 State0 = np.zeros((NcellsClean, 6))
 State0[:,0] = PopulationClean
+MaxPop = np.max(PopulationClean)
+ArgPop = np.argmax(PopulationClean)
+State0[ArgPop,0] = 0.99 * MaxPop
+State0[ArgPop,2] = 0.01 * MaxPop
 
 # run the simulation by looping through the simulation steps
 # define the storage structure
@@ -249,8 +291,47 @@ for tt in range(Ttotal):
     StateNew = SimulateSingleStep(StateOld, OptsEpid, OptsTrans)
     
     # report on the new state
-    StateAll[:,:,tt]
+    StateAll[:,:,tt] = StateNew
     
     # store the new state
     StateOld = StateNew
+
+
+
+#%% define a function to map the clean cells back to the worldmap
+def MapCleanCellsToAllCells(StatesClean, Mask, LatGrid, LonGrid):
     
+    # create the empty target map
+    states = np.zeros((LatGrid.shape[0] * LatGrid.shape[1], StatesClean.shape[1]))
+    
+    # concatenate the mask
+    mask_flat = np.concatenate(Mask)
+    
+    # assign the values
+    states[mask_flat == 1,:] = StatesClean
+    
+    # reshape the states to be a 3D matrix
+    States = np.zeros((LatGrid.shape[0], LatGrid.shape[1], StatesClean.shape[1]))
+    for ii in range(states.shape[1]):
+        States[:,:,ii] = np.reshape(states[:,ii], LatGrid.shape)
+    
+    # return the states in the grid
+    return States
+
+
+
+#%% plot the state evolution of the infected back on the worldmap
+# create the initial state in grid format
+StateGrid = MapCleanCellsToAllCells(StateAll[:,:,199], FlagRemove < 1, LatGrid, LonGrid)
+
+# plotting the evolution of the combination of I0 and I1 over time and geography
+plt.figure()
+plt.imshow(np.log10(StateGrid[:,:,2] / np.sum(State0Grid,axis=2)), origin='lower', vmin=-10, vmax=0)
+
+
+
+#%% plot the evolution of a single cell
+plt.figure()
+plt.plot(np.transpose(StateAll[ArgPop0,:,:]))
+plt.yscale('log')
+plt.legend(('susceptible', 'exposed', 'silent infected', 'infected', 'cured', 'deseased'))

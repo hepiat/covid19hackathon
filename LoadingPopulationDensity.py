@@ -14,6 +14,7 @@ Created on Sat Mar 28 10:59:16 2020
 import numpy as np
 import gdal
 import matplotlib.pyplot as plt
+from PIL import Image, ImageDraw
 
 
 #%% get the data
@@ -47,17 +48,13 @@ Lon, Lat = np.meshgrid(lon, lat)
 # fill the grid
 
 
-#%% Include country shape into grid
-import geopandas as gdp
-
-plt.rcParams["figure.figsize"] = (10,10)
 
 #%% new trial
 import numpy as np
 import pandas as pd
 import shapefile as shp
 import matplotlib.pyplot as plt
-import seaborn as sns
+#import seaborn as sns
 
 world_path ="./ne_50m_admin_0_countries/ne_50m_admin_0_countries.shp"
 world = shp.Reader(world_path)
@@ -100,10 +97,6 @@ def plot_shape(id, s=None):
     plt.xlim(shape_ex.bbox[0],shape_ex.bbox[2])
     return x0, y0
 
-#%%Draw on the grid
-selected_country = 'VN'
-country_id = df[df.ISO_A2 == selected_country].index.get_values()[0]
-plot_shape(country_id, selected_country)
 
 
 #%%Draw on the grid
@@ -133,17 +126,82 @@ def plot_map(world, x_lim = None, y_lim = None, figsize = (11,9)):
 plot_map(world)
 
 
-#%%Draw on the grid
-Vietnam=df[df.ISO_A2 == 'VN']
-VN_coords=Vietnam['coords']
 
-for i in VN_coords.iteritems():
-    for j in range (len(i[1])):
-        print (i[1][j][0])
-        new_lon=i[1][j][0]+180
-        print(new_lon)
-        print (i[1][j][1])
-        new_lat=i[1][j][1]+90
-        print(new_lat)
+#%% get in onto the grid
+# define the grid 
+lon = np.arange(-180, 180, 1)
+lat = np.arange(-90,90,1)
+Lat, Lon = np.meshgrid(lon, lat)
+
+# loop through the countries 
+MeshAll = np.zeros((Lon.shape[0], Lon.shape[1], df.shape[0]))
+for ii in range(df.shape[0]):
+    
+    # current country
+    print(df['ISO_A3'][ii])
+    
+    # getting the coordinates
+    coords = np.array(df['coords'][ii])
+    
+    # transformation
+    coords_trans = np.zeros(coords.shape)
+    coords_trans[:,0] = coords[:,1] + 90
+    coords_trans[:,1] = coords[:,0] + 180
+
+    # try again without spliting the map
+    #img = Image.new('L', (Lat.shape), 0)
+    #ImageDraw.Draw(img).polygon(tuple(map(tuple, (coords_trans))), outline=1, fill=1)
+    #mm = np.array(img)
+    
+    # identify the different sections by looking at recurring points
+    co = coords_trans
+    IDstart = list()
+    idstart = 0
+    IDend = list()
+    while idstart < co.shape[0]:
+        co1 = co[idstart,:]
+        
+        idloop = np.arange(co.shape[0]) * ((co[:,0] == co1[0]) * (co[:,1] == co1[1]))
+        idloop = idloop[idloop>0]
+        
+        # collect the indices
+        IDstart.append(idstart)
+        IDend.append(idloop[-1])
+        
+        # reset id start
+        idstart = idloop[-1] + 1
+            
+    # loop over the different polygons in this country
+    Mask = np.zeros((Lon.shape[1],Lon.shape[0],len(IDstart)))
+    for pp in range(len(IDstart)):    
+        # create a new image
+        img = Image.new('L', (Lat.shape), 0)
+    
+        # define the polygon
+        ImageDraw.Draw(img).polygon(tuple(map(tuple, coords_trans[IDstart[pp]:(IDend[pp]+1),:])), outline=1, fill=1)
+        
+        # make the mask
+        mask = np.array(img)
+        Mask[:,:,pp] = mask
+        
+    Mask = np.sum(Mask, axis=2) 
+    Mask[Mask > 1] = 1
+        
+    MeshAll[:,:,ii] = np.transpose(Mask)
+    
+    # show the image for checking
+    #plt.figure()
+    #plt.imshow(np.transpose(mask), origin='lower')
 
 
+# save the mask for later usage
+np.save('Mask', MeshAll) 
+np.save('Countries', df)   
+
+
+
+#%% plot a single country for checking
+plt.figure()
+for pp in range(len(IDstart)):
+    
+    plt.plot(coords_trans[IDstart[pp]:(IDend[pp]+1),0], coords_trans[IDstart[pp]:(IDend[pp]+1),1])
